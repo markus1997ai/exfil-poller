@@ -1,5 +1,3 @@
-import fetch from 'node-fetch';
-
 export default async function handler(req, res) {
   const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
   if (!GITHUB_TOKEN) {
@@ -24,6 +22,6 @@ export default async function handler(req, res) {
 
   const data = await response.json();
 
-  // For now, just return the data to see what’s available
+  // Just return the result for now
   return res.status(200).json(data);
 }
