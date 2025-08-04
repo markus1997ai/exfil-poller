@@ -1,18 +1,32 @@
-export default async function handler(req, res) {
-  const { slug = [] } = req.query;
-  const path = slug.join('/');
-  const match = path.match(/^\d+_(.+)\.ico$/);
-  if (!match) return res.status(400).send('Invalid format');
+import { NextRequest } from 'next/server';
 
-  const encoded = match[1];
-  try {
-    const json = decodeURIComponent(escape(atob(encoded)));
-    const data = JSON.parse(json);
-    console.log('✅ Payload received:', data);
-    res.setHeader('Content-Type', 'image/x-icon');
-    res.status(200).send('');
-  } catch (e) {
-    console.error('❌ Decode error:', e.message);
-    res.status(400).send('Bad payload');
-  }
+export const config = {
+  runtime: 'edge',
+};
+
+export default async function handler(req: NextRequest) {
+  const url = req.nextUrl.pathname;
+  const ts = Date.now();
+
+  console.log(`[📥] ${ts}: Incoming request to ${url}`);
+
+  return new Response(
+    // 1x1 transparent .ico file to stop browser retries
+    new Uint8Array([
+      0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x10, 0x10,
+      0x00, 0x00, 0x01, 0x00, 0x04, 0x00, 0x28, 0x01,
+      0x00, 0x00, 0x16, 0x00, 0x00, 0x00, 0x28, 0x00,
+      0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x20, 0x00,
+      0x00, 0x00, 0x01, 0x00, 0x04, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    ]),
+    {
+      status: 200,
+      headers: {
+        'Content-Type': 'image/x-icon',
+        'Cache-Control': 'no-store',
+      },
+    }
+  );
 }
