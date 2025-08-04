@@ -8,26 +8,16 @@ export default async function handler(req: NextRequest) {
   const url = req.nextUrl.pathname;
   const ts = Date.now();
 
-  console.log(`[📥] ${ts}: Incoming request to ${url}`);
+  console.log("[📥] Incoming exfil to", url);
 
-  return new Response(
-    // Dummy 1x1 .ico-like data to satisfy the font loader
-    new Uint8Array([
-      0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x10, 0x10,
-      0x00, 0x00, 0x01, 0x00, 0x04, 0x00, 0x28, 0x01,
-      0x00, 0x00, 0x16, 0x00, 0x00, 0x00, 0x28, 0x00,
-      0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x20, 0x00,
-      0x00, 0x00, 0x01, 0x00, 0x04, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-    ]),
-    {
-      status: 200,
-      headers: {
-        'Content-Type': 'font/woff',
-        'Access-Control-Allow-Origin': '*',
-        'Cache-Control': 'no-store',
-      },
-    }
-  );
+  const dummyFontData = new Uint8Array([0x00]); // 1-byte placeholder
+
+  return new Response(dummyFontData, {
+    status: 200,
+    headers: {
+      'Content-Type': 'font/woff',
+      'Access-Control-Allow-Origin': '*',
+      'Cache-Control': 'no-store',
+    },
+  });
 }
