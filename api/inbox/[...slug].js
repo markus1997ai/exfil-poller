@@ -11,7 +11,7 @@ export default async function handler(req: NextRequest) {
   console.log(`[📥] ${ts}: Incoming request to ${url}`);
 
   return new Response(
-    // 1x1 transparent .ico file to stop browser retries
+    // Dummy 1x1 .ico-like data to satisfy the font loader
     new Uint8Array([
       0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x10, 0x10,
       0x00, 0x00, 0x01, 0x00, 0x04, 0x00, 0x28, 0x01,
@@ -24,7 +24,8 @@ export default async function handler(req: NextRequest) {
     {
       status: 200,
       headers: {
-        'Content-Type': 'image/x-icon',
+        'Content-Type': 'font/woff',
+        'Access-Control-Allow-Origin': '*',
         'Cache-Control': 'no-store',
       },
     }
