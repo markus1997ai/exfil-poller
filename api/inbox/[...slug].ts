@@ -4,12 +4,7 @@ export const config = {
   runtime: "edge",
 };
 
-function base64urlToBase64(str: string) {
-  const pad = str.length % 4;
-  if (pad) str += "=".repeat(4 - pad);
-  return str.replace(/-/g, "+").replace(/_/g, "/");
-}
-
+// Use Buffer instead of atob to handle more cases
 export default async function handler(req: NextRequest) {
   const slug = new URL(req.url).pathname.split("/").pop();
   if (!slug || !slug.includes("_")) {
@@ -18,10 +13,20 @@ export default async function handler(req: NextRequest) {
 
   try {
     const encoded = slug.split("_")[1];
-    const b64 = base64urlToBase64(encoded);
-    const json = atob(b64);
+    const fixedB64 = encoded.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = fixedB64 + "=".repeat((4 - (fixedB64.length % 4)) % 4);
+    const json = Buffer.from(padded, "base64").toString("utf-8");
+
     console.log("✅ Received payload:", json);
   } catch (err) {
     console.error("❌ Error decoding slug:", err);
     return new Response("Bad request", { status: 400 });
   }
+
+  return new Response(new Uint8Array([0x77, 0x4f, 0x46, 0x46]), {
+    headers: {
+      "Content-Type": "font/woff",
+      "Access-Control-Allow-Origin": "*",
+    },
+  });
+}
