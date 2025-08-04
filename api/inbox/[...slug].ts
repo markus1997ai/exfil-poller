@@ -1,13 +1,15 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-export default function handler(req: VercelRequest, res: VercelResponse) {
-  const dummyFontData = Buffer.from([
-    0x00, 0x01, 0x00, 0x00, // minimal valid woff header bytes (dummy)
-    0x00, 0x10, 0x00, 0x80,
-  ]);
+// Minimal valid WOFF font binary (tiny font file)
+const dummyFont = Buffer.from([
+  119,79,70,70,0,0,0,54,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+]);
 
-  res.setHeader('Content-Type', 'font/woff');
+export default function handler(req: VercelRequest, res: VercelResponse) {
+  console.log('Received payload:', req.query.slug);
+
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Cache-Control', 'no-store');
-  res.status(200).send(dummyFontData);
+  res.setHeader('Content-Type', 'font/woff');
+
+  res.status(200).send(dummyFont);
 }
