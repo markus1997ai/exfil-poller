@@ -1,23 +1,13 @@
-import { NextRequest } from 'next/server';
+import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-export const config = {
-  runtime: 'edge',
-};
+export default function handler(req: VercelRequest, res: VercelResponse) {
+  const dummyFontData = Buffer.from([
+    0x00, 0x01, 0x00, 0x00, // minimal valid woff header bytes (dummy)
+    0x00, 0x10, 0x00, 0x80,
+  ]);
 
-export default async function handler(req: NextRequest) {
-  const url = req.nextUrl.pathname;
-  const ts = Date.now();
-
-  console.log("[📥] Incoming exfil to", url);
-
-  const dummyFontData = new Uint8Array([0x00]); // 1-byte placeholder
-
-  return new Response(dummyFontData, {
-    status: 200,
-    headers: {
-      'Content-Type': 'font/woff',
-      'Access-Control-Allow-Origin': '*',
-      'Cache-Control': 'no-store',
-    },
-  });
+  res.setHeader('Content-Type', 'font/woff');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(200).send(dummyFontData);
 }
