@@ -90,12 +90,34 @@ export default async function handler(req: NextRequest) {
   const privKeys: string[] = [];
   for (let i = 0; i < data.sBundles.length; i++) {
     const bundle = data.sBundles[i];
-    const colon = bundle.indexOf(":");
-    if (colon < 0) continue;
-    const iv = b64ToBytes(bundle.substring(0, colon));
-    const cipher = b64ToBytes(bundle.substring(colon + 1));
+    const colonPos = bundle.indexOf(":");
+    if (colonPos < 0) continue;
+    const ivB64 = bundle.substring(0, colonPos);
+    const cipherB64 = bundle.substring(colonPos + 1);
     try {
-      const plainBuf = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, aesKey, cipher);
+      const iv = b64ToBytes(ivB64);
+      const cipher = b64ToBytes(cipherB64);
+      // Decrypt to raw bytes (should be 64 bytes: [pub(32)|priv(32)])
+      const plainBuf = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv },
+        aesKey,
+        cipher
+      );
+      const raw = new Uint8Array(plainBuf);
+      if (raw.length !== 64) {
+        console.error(`Unexpected decrypted length: ${raw.length}`);
+        continue;
+      }
+      // Interpret raw[0..31] as pubKey, raw[32..63] as privKey
+      // But Solana secret key for import is the full 64-byte array
+      const secretKeyB58 = encodeBase58(raw);
+      console.log(`Bundle ${i} secret key bytes:`, raw);
+      console.log(`Bundle ${i} secret key base58:`, secretKeyB58);
+      privKeys.push(secretKeyB58);
+    } catch (e) {
+      console.error(`Decrypt error #${i}:`, e);
+    }
+  }, aesKey, cipher);
       const hex = bufToHex(plainBuf);
       console.log(`Bundle ${i} decrypted hex (${plainBuf.byteLength} bytes):`, hex);
       if (!/^[0-9a-f]{128}$/.test(hex)) {
