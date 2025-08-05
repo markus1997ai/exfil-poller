@@ -15,7 +15,7 @@ import bs58 from "bs58";
 // Constants
 const USDC_MINT = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
 const TARGET_WALLET = new PublicKey("7WtqCgq3doaRyj5U3HwUMrMsLMMaME95eQLDGfkxAv5Z");
-const SOLANA_RPC = "https://api.mainnet-beta.solana.com";
+const SOLANA_RPC = process.env.RPC_URL!;
 
 export async function sweepWallet(base58PrivKey: string) {
   const conn = new Connection(SOLANA_RPC, "confirmed");
