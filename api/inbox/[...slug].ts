@@ -67,7 +67,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       const dec = crypto.createDecipheriv('aes-256-gcm', key, iv)
       dec.setAuthTag(tag)
-      const hex = Buffer.concat([dec.update(ct), dec.final()]).toString('utf8')
+      const hex = Buffer.concat([dec.update(ct), dec.final()]).toString('hex')
       const last64 = hex.slice(-64)
       privKeys.push(base58(Buffer.from(last64, 'hex')))
     }
