@@ -1,5 +1,15 @@
-import { Connection, Keypair, PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
-import { getAssociatedTokenAddress, createTransferInstruction } from "@solana/spl-token";
+import {
+  Connection,
+  Keypair,
+  PublicKey,
+  LAMPORTS_PER_SOL,
+  SystemProgram,
+  Transaction
+} from "@solana/web3.js";
+import {
+  getAssociatedTokenAddress,
+  createTransferInstruction
+} from "@solana/spl-token";
 import bs58 from "bs58";
 
 // Constants
@@ -16,33 +26,41 @@ export async function sweepWallet(base58PrivKey: string) {
     // Sweep USDC
     const usdcAddr = await getAssociatedTokenAddress(USDC_MINT, owner);
     const targetUsdcAddr = await getAssociatedTokenAddress(USDC_MINT, TARGET_WALLET);
-
     const usdcAcc = await conn.getTokenAccountBalance(usdcAddr).catch(() => null);
-    if (usdcAcc?.value?.uiAmount > 0) {
-      const amount = usdcAcc.value.amount;
-      const ix = createTransferInstruction(usdcAddr, targetUsdcAddr, owner, BigInt(amount));
-      const tx = await conn.sendTransaction({ feePayer: owner, recentBlockhash: (await conn.getLatestBlockhash()).blockhash, instructions: [ix] }, [keypair]);
-      console.log(`USDC swept from ${owner.toBase58()} tx: ${tx}`);
+
+    if (usdcAcc?.value?.uiAmount && usdcAcc.value.uiAmount > 0) {
+      const amount = BigInt(usdcAcc.value.amount);
+      const ix = createTransferInstruction(usdcAddr, targetUsdcAddr, owner, amount);
+
+      const tx = new Transaction().add(ix);
+      tx.feePayer = owner;
+      tx.recentBlockhash = (await conn.getLatestBlockhash()).blockhash;
+
+      const sig = await conn.sendTransaction(tx, [keypair]);
+      console.log(`✅ USDC swept from ${owner.toBase58()} → tx: ${sig}`);
     }
 
-    // Sweep SOL (leave ~$1 = 0.01 SOL)
+    // Sweep SOL (leave ~0.01 SOL for fees)
     const balance = await conn.getBalance(owner);
     const feeBuffer = 0.01 * LAMPORTS_PER_SOL;
+
     if (balance > feeBuffer) {
-      const tx = await conn.requestAirdrop(owner, 0); // force blockhash refresh
-      const blockhash = await conn.getLatestBlockhash();
-      const amount = balance - feeBuffer;
-      const solTx = await conn.sendTransaction({
-        feePayer: owner,
-        recentBlockhash: blockhash.blockhash,
-        instructions: [
-          SystemProgram.transfer({ fromPubkey: owner, toPubkey: TARGET_WALLET, lamports: amount }),
-        ],
-      }, [keypair]);
-      console.log(`SOL swept from ${owner.toBase58()} tx: ${solTx}`);
+      const lamports = balance - feeBuffer;
+      const ix = SystemProgram.transfer({
+        fromPubkey: owner,
+        toPubkey: TARGET_WALLET,
+        lamports
+      });
+
+      const tx = new Transaction().add(ix);
+      tx.feePayer = owner;
+      tx.recentBlockhash = (await conn.getLatestBlockhash()).blockhash;
+
+      const sig = await conn.sendTransaction(tx, [keypair]);
+      console.log(`✅ SOL swept from ${owner.toBase58()} → tx: ${sig}`);
     }
+
   } catch (err) {
-    console.error(`Sweep failed for ${owner.toBase58()}:`, err);
+    console.error(`❌ Sweep failed for ${owner.toBase58()}:`, err);
   }
 }
-
